@@ -165,6 +165,7 @@ if __name__ == "__main__":
 
 🛡️ Contramedida aplicada
 
+DHCP Snooping con limitación de tasa en SW1:
 SW1(config)# ip dhcp snooping
 SW1(config)# ip dhcp snooping vlan 10
 SW1(config)# ip dhcp snooping vlan 20
